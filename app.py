@@ -172,19 +172,19 @@ def telegram_polling():
                             f"{result['short_url']}\n\n"
                             "Payment successful అయిన తర్వాత premium channel access link మీకు automatically వస్తుంది."
                         )
-                    else:
-    print("Subscription creation error:", result)
+                                        else:
+                        print("Subscription creation error:", result)
 
-    error_message = (
-        result.get("error", {}).get("description")
-        or str(result)
-    )
+                        error_message = (
+                            result.get("error", {}).get("description")
+                            or str(result)
+                        )
 
-    send_message(
-        chat_id,
-        "❌ Razorpay Error:\n\n"
-        + error_message
-    )
+                        send_message(
+                            chat_id,
+                            "❌ Razorpay Error:\n\n"
+                            + error_message
+                        )
         except Exception as e:
             print("Telegram polling error:", e)
             time.sleep(5)
