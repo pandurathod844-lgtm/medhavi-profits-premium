@@ -6,86 +6,54 @@ import threading
 import requests
 
 from flask import Flask, request, jsonify
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-app = Flask(__name__)
 
 # =========================
 # ENVIRONMENT VARIABLES
 # =========================
 
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHANNEL_ID = os.environ["TELEGRAM_CHANNEL_ID"]
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 
-RAZORPAY_KEY_ID = os.environ["RAZORPAY_KEY_ID"]
-RAZORPAY_KEY_SECRET = os.environ["RAZORPAY_KEY_SECRET"]
-RAZORPAY_WEBHOOK_SECRET = os.environ["RAZORPAY_WEBHOOK_SECRET"]
-RAZORPAY_PLAN_ID = os.environ["RAZORPAY_PLAN_ID"]
-
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-RAZORPAY_API = "https://api.razorpay.com/v1"
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+RAZORPAY_PLAN_ID = os.getenv("RAZORPAY_PLAN_ID")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
 
 # =========================
-# TELEGRAM
+# FLASK APP
 # =========================
 
-def telegram(method, data=None):
-    url = f"{TELEGRAM_API}/{method}"
+app = Flask(__name__)
 
-    response = requests.post(
-        url,
-        data=data or {},
-        timeout=30
-    )
-
-    return response.json()
+processed_subscriptions = set()
 
 
-def send_message(chat_id, text):
-    return telegram(
-        "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": text
-        }
-    )
+# =========================
+# TELEGRAM API
+# =========================
 
+def telegram_api(method, data):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
 
-def create_invite_link():
-    result = telegram(
-        "createChatInviteLink",
-        {
-            "chat_id": CHANNEL_ID,
-            "member_limit": 1
-        }
-    )
+    try:
+        response = requests.post(
+            url,
+            json=data,
+            timeout=30
+        )
 
-    if result.get("ok"):
-        return result["result"]["invite_link"]
+        print("Telegram:", method, response.status_code)
+        print(response.text)
 
-    print("Invite error:", result)
+        return response.json()
 
-    return None
-
-
-def remove_member(user_id):
-
-    telegram(
-        "banChatMember",
-        {
-            "chat_id": CHANNEL_ID,
-            "user_id": user_id
-        }
-    )
-
-    telegram(
-        "unbanChatMember",
-        {
-            "chat_id": CHANNEL_ID,
-            "user_id": user_id,
-            "only_if_banned": True
-        }
-    )
+    except Exception as e:
+        print("Telegram API Error:", e)
+        return {}
 
 
 # =========================
@@ -94,11 +62,11 @@ def remove_member(user_id):
 
 def create_subscription(telegram_user_id):
 
-    url = f"{RAZORPAY_API}/subscriptions"
+    url = "https://api.razorpay.com/v1/subscriptions"
 
-    payload = {
+    data = {
         "plan_id": RAZORPAY_PLAN_ID,
-        "total_count": 1200,
+        "total_count": 12,
         "quantity": 1,
         "customer_notify": True,
         "notes": {
@@ -106,585 +74,196 @@ def create_subscription(telegram_user_id):
         }
     }
 
-    response = requests.post(
-        url,
-        auth=(
-            RAZORPAY_KEY_ID,
-            RAZORPAY_KEY_SECRET
-        ),
-        json=payload,
-        timeout=30
+    try:
+
+        response = requests.post(
+            url,
+            auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+            json=data,
+            timeout=30
+        )
+
+        print("Razorpay Status:", response.status_code)
+        print("Razorpay Response:", response.text)
+
+        result = response.json()
+
+        if response.status_code >= 400:
+            return None, result
+
+        return result, None
+
+    except Exception as e:
+
+        print("Razorpay Exception:", e)
+
+        return None, {
+            "error": {
+                "description": str(e)
+            }
+        }
+
+
+# =========================
+# /START
+# =========================
+
+async def start_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    message = update.effective_message
+
+    await message.reply_text(
+        "👋 Medhavi Profits Premium కు స్వాగతం!\n\n"
+        "💎 Premium Membership\n"
+        "💰 ₹1499 / Month\n\n"
+        "Premium membership కోసం /join పంపండి."
     )
 
-    print("Razorpay Status:", response.status_code)
-    print("Razorpay Response:", response.text)
 
-    return response.json()
+# =========================
+# /JOIN
+# =========================
+
+async def join_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    message = update.effective_message
+    chat_id = message.chat_id
+
+    print("JOIN REQUEST:", chat_id)
+
+    result, error = create_subscription(chat_id)
+
+    if error:
+
+        error_message = (
+            error
+            .get("error", {})
+            .get("description")
+            or str(error)
+        )
+
+        await message.reply_text(
+            "❌ Razorpay Error:\n\n"
+            + error_message
+        )
+
+        return
+
+    short_url = result.get("short_url")
+
+    if not short_url:
+
+        await message.reply_text(
+            "❌ Payment link create కాలేదు.\n"
+            "కొద్దిసేపటి తర్వాత మళ్లీ ప్రయత్నించండి."
+        )
+
+        return
+
+    await message.reply_text(
+        "💎 Medhavi Profits Premium\n\n"
+        "💰 Membership: ₹1499 / Month\n\n"
+        "👇 Payment చేయడానికి ఈ link open చేయండి:\n\n"
+        + short_url
+        + "\n\n"
+        "✅ Payment successful అయిన తర్వాత "
+        "Premium Channel access కోసం invite link వస్తుంది."
+    )
 
 
 # =========================
 # TELEGRAM POLLING
 # =========================
 
-def telegram_polling():
+def run_telegram():
 
-    offset = None
+    try:
 
-    while True:
+        import asyncio
 
-        try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-            params = {
-                "timeout": 30
-            }
+        telegram_app = (
+            Application
+            .builder()
+            .token(TELEGRAM_BOT_TOKEN)
+            .build()
+        )
 
-            if offset is not None:
-                params["offset"] = offset
+        telegram_app.add_handler(
+            CommandHandler("start", start_command)
+        )
 
-            response = requests.get(
-                f"{TELEGRAM_API}/getUpdates",
-                params=params,
-                timeout=40
-            )
+        telegram_app.add_handler(
+            CommandHandler("join", join_command)
+        )
 
-            data = response.json()
+        loop.run_until_complete(
+            telegram_app.initialize()
+        )
 
-            if not data.get("ok"):
+        loop.run_until_complete(
+            telegram_app.start()
+        )
 
-                print(
-                    "Telegram error:",
-                    data
-                )
+        loop.run_until_complete(
+            telegram_app.updater.start_polling()
+        )
 
-                time.sleep(5)
-                continue
+        print("Telegram Bot Started")
 
-            for update in data.get("result", []):
+        loop.run_forever()
 
-                offset = update["update_id"] + 1
+    except Exception as e:
 
-                message = update.get("message")
-
-                if not message:
-                    continue
-
-                chat_id = message["chat"]["id"]
-
-                text = message.get(
-                    "text",
-                    ""
-                ).strip()
-
-                # =========================
-                # START
-                # =========================
-
-                if text == "/start":
-
-                    send_message(
-                        chat_id,
-                        "👋 Welcome to Medhavi Profits Premium!\n\n"
-                        "💎 Monthly Membership: ₹1,499\n\n"
-                        "Premium membership కోసం /join టైప్ చేయండి."
-                    )
-
-                # =========================
-                # JOIN
-                # =========================
-
-                elif text == "/join":
-
-                    send_message(
-                        chat_id,
-                        "⏳ మీ ₹1,499 monthly subscription payment link create చేస్తున్నాను..."
-                    )
-
-                    result = create_subscription(
-                        chat_id
-                    )
-
-                    # =========================
-                    # SUCCESS
-                    # =========================
-
-                    if result.get("short_url"):
-
-                        send_message(
-                            chat_id,
-                            "💎 MEDHAVI PROFITS PREMIUM\n\n"
-                            "💰 Monthly: ₹1,499\n"
-                            "🔄 Auto-renewal: Monthly\n\n"
-                            "👇 Payment complete చేయడానికి ఈ link open చేయండి:\n\n"
-                            f"{result['short_url']}\n\n"
-                            "Payment successful అయిన తర్వాత "
-                            "premium channel access link మీకు automatically వస్తుంది."
-                        )
-
-                    # =========================
-                    # ERROR
-                    # =========================
-
-                    else:
-
-                        print(
-                            "Subscription creation error:",
-                            result
-                        )
-
-                        error_message = (
-                            result
-                            .get("error", {})
-                            .get("description")
-                            or str(result)
-                        )
-
-                        send_message(
-                            chat_id,
-                            "❌ Razorpay Error:\n\n"
-                            + error_message
-                        )
-
-        except Exception as error:
-
-            print(
-                "Telegram polling error:",
-                error
-            )
-
-            time.sleep(5)
+        print("Telegram error:", e)
 
 
 # =========================
 # RAZORPAY WEBHOOK
 # =========================
 
-@app.route(
-    "/webhook/razorpay",
-    methods=["POST"]
-)
-def razorpay_webhook():
-
-    body = request.get_data()
-
-    received_signature = request.headers.get(
-        "X-Razorpay-Signature",
-        ""
-    )
-
-    expected_signature = hmac.new(
-        RAZORPAY_WEBHOOK_SECRET.encode(),
-        body,
-        hashlib.sha256
-    ).hexdigest()
-
-    if not hmac.compare_digest(
-        received_signature,
-        expected_signature
-    ):
-
-        return jsonify(
-            {
-                "status": "invalid signature"
-            }
-        ), 400
-
-    data = request.get_json()
-
-    event = data.get(
-        "event",
-        ""
-    )
-
-    print(
-        "Razorpay Event:",
-        event
-    )
-
-    subscription = (
-        data
-        .get("payload", {})
-        .get("subscription", {})
-        .get("entity", {})
-    )
-
-    notes = subscription.get(
-        "notes",
-        {}
-    )
-
-    telegram_user_id = notes.get(
-        "telegram_user_id"
-    )
-
-    if not telegram_user_id:
-
-        print(
-            "Telegram user ID not found"
-        )
-
-        return jsonify(
-            {
-                "status": "ok"
-            }
-        ), 200
-
-    # =========================
-    # PAYMENT SUCCESS
-    # =========================
-
-    if event in [
-        "subscription.authenticated",
-        "subscription.activated",
-        "subscription.charged"
-    ]:
-
-        invite_link = create_invite_link()
-
-        if invite_link:
-
-            send_message(
-                telegram_user_id,
-                "✅ PAYMENT SUCCESSFUL!\n\n"
-                "🎉 మీ Medhavi Profits Premium membership active అయింది.\n\n"
-                "👇 Premium Channel Join Link:\n"
-                f"{invite_link}\n\n"
-                "⚠️ ఈ linkని ఇతరులతో share చేయకండి."
-            )
-
-    # =========================
-    # SUBSCRIPTION STOPPED
-    # =========================
-
-    elif event in [
-        "subscription.halted",
-        "subscription.completed"
-    ]:
-
-        send_message(
-            telegram_user_id,
-            "⚠️ మీ Premium subscription ముగిసింది.\n\n"
-            "Premium channel access కూడా ముగించబడుతుంది."
-        )
-
-        try:
-
-            remove_member(
-                telegram_user_id
-            )
-
-        except Exception as error:
-
-            print(
-                "Remove member error:",
-                error
-            )
-
-    return jsonify(
-        {
-            "status": "ok"
-        }
-    ), 200
-
-
-# =========================
-# HOME
-# =========================
-
-@app.route(
-    "/",
-    methods=["GET"]
-)
-def home():
-
-    return "Medhavi Profits Premium Bot is running!"
-
-
-# =========================
-# HEALTH
-# =========================
-
-@app.route(
-    "/health",
-    methods=["GET"]
-)
-def health():
-
-    return jsonify(
-        {
-            "status": "healthy"
-        }
-    )
-
-
-# =========================
-# START SERVER
-# =========================
-
-if __name__ == "__main__":
-
-    threading.Thread(
-        target=telegram_polling,
-        daemon=True
-    ).start()
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            10000
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    ) os
-import time
-import hmac
-import hashlib
-import threading
-import requests
-
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHANNEL_ID = os.environ["TELEGRAM_CHANNEL_ID"]
-
-RAZORPAY_KEY_ID = os.environ["RAZORPAY_KEY_ID"]
-RAZORPAY_KEY_SECRET = os.environ["RAZORPAY_KEY_SECRET"]
-RAZORPAY_WEBHOOK_SECRET = os.environ["RAZORPAY_WEBHOOK_SECRET"]
-RAZORPAY_PLAN_ID = os.environ["RAZORPAY_PLAN_ID"]
-
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-RAZORPAY_API = "https://api.razorpay.com/v1"
-
-
-def telegram(method, data=None):
-    url = f"{TELEGRAM_API}/{method}"
-    r = requests.post(url, data=data or {}, timeout=30)
-    return r.json()
-
-
-def send_message(chat_id, text):
-    return telegram(
-        "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": text
-        }
-    )
-
-
-def create_invite_link():
-    result = telegram(
-        "createChatInviteLink",
-        {
-            "chat_id": CHANNEL_ID,
-            "member_limit": 1
-        }
-    )
-
-    if result.get("ok"):
-        return result["result"]["invite_link"]
-
-    print("Invite error:", result)
-    return None
-
-
-def remove_member(user_id):
-    telegram(
-        "banChatMember",
-        {
-            "chat_id": CHANNEL_ID,
-            "user_id": user_id
-        }
-    )
-
-    telegram(
-        "unbanChatMember",
-        {
-            "chat_id": CHANNEL_ID,
-            "user_id": user_id,
-            "only_if_banned": True
-        }
-    )
-
-
-def create_subscription(telegram_user_id):
-    url = f"{RAZORPAY_API}/subscriptions"
-
-    payload = {
-        "plan_id": RAZORPAY_PLAN_ID,
-        "total_count": 1200,
-        "quantity": 1,
-        "customer_notify": True,
-        "notes": {
-            "telegram_user_id": str(telegram_user_id)
-        }
-    }
-
-    r = requests.post(
-        url,
-        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
-        json=payload,
-        timeout=30
-    )
-
-    return r.json()
-
-
-def telegram_polling():
-    offset = None
-
-    while True:
-        try:
-            params = {
-                "timeout": 30
-            }
-
-            if offset is not None:
-                params["offset"] = offset
-
-            r = requests.get(
-                f"{TELEGRAM_API}/getUpdates",
-                params=params,
-                timeout=40
-            )
-
-            data = r.json()
-
-            if not data.get("ok"):
-                print("Telegram getUpdates error:", data)
-                time.sleep(5)
-                continue
-
-            for update in data.get("result", []):
-                offset = update["update_id"] + 1
-
-                message = update.get("message")
-
-                if not message:
-                    continue
-
-                chat_id = message["chat"]["id"]
-                text = message.get("text", "").strip()
-
-                if text == "/start":
-
-                    send_message(
-                        chat_id,
-                        "👋 Welcome to Medhavi Profits Premium!\n\n"
-                        "💎 Monthly Membership: ₹1,499\n\n"
-                        "Premium membership కోసం /join టైప్ చేయండి."
-                    )
-
-                elif text == "/join":
-
-                    send_message(
-                        chat_id,
-                        "⏳ మీ ₹1,499 monthly subscription payment link create చేస్తున్నాను..."
-                    )
-
-                    result = create_subscription(chat_id)
-
-                    if result.get("short_url"):
-
-                        send_message(
-                            chat_id,
-                            "💎 MEDHAVI PROFITS PREMIUM\n\n"
-                            "💰 Monthly: ₹1,499\n"
-                            "🔄 Auto-renewal: Monthly\n\n"
-                            "👇 Payment complete చేయడానికి ఈ link open చేయండి:\n\n"
-                            f"{result['short_url']}\n\n"
-                            "Payment successful అయిన తర్వాత premium channel access link మీకు automatically వస్తుంది."
-                        )
-
-                    else:
-
-                        print(
-                            "Subscription creation error:",
-                            result
-                        )
-
-                        error_message = (
-                            result.get("error", {}).get("description")
-                            or str(result)
-                        )
-
-                        send_message(
-                            chat_id,
-                            "❌ Razorpay Error:\n\n"
-                            + error_message
-                        )
-
-        except Exception as e:
-
-            print(
-                "Telegram polling error:",
-                e
-            )
-
-            time.sleep(5)
-
-
 @app.route("/webhook/razorpay", methods=["POST"])
 def razorpay_webhook():
 
-    body = request.get_data()
+    payload = request.get_data()
 
-    received_signature = request.headers.get(
+    signature = request.headers.get(
         "X-Razorpay-Signature",
         ""
     )
 
     expected_signature = hmac.new(
         RAZORPAY_WEBHOOK_SECRET.encode(),
-        body,
+        payload,
         hashlib.sha256
     ).hexdigest()
 
     if not hmac.compare_digest(
-        received_signature,
+        signature,
         expected_signature
     ):
+
+        print("Invalid Razorpay webhook signature")
+
         return jsonify({
             "status": "invalid signature"
         }), 400
 
-    data = request.get_json()
+
+    data = request.get_json(silent=True) or {}
 
     event = data.get("event", "")
 
-    print(
-        "Razorpay Event:",
-        event
-    )
+    print("Razorpay Event:", event)
 
-    subscription = (
-        data.get("payload", {})
-        .get("subscription", {})
-        .get("entity", {})
-    )
-
-    notes = subscription.get(
-        "notes",
-        {}
-    )
-
-    telegram_user_id = notes.get(
-        "telegram_user_id"
-    )
-
-    if not telegram_user_id:
-
-        print(
-            "Telegram user ID not found"
-        )
-
-        return jsonify({
-            "status": "ok"
-        }), 200
 
     if event in [
         "subscription.authenticated",
@@ -692,488 +271,118 @@ def razorpay_webhook():
         "subscription.charged"
     ]:
 
-        invite_link = create_invite_link()
-
-        if invite_link:
-
-            send_message(
-                telegram_user_id,
-                "✅ PAYMENT SUCCESSFUL!\n\n"
-                "🎉 మీ Medhavi Profits Premium membership active అయింది.\n\n"
-                "👇 Premium Channel Join Link:\n"
-                f"{invite_link}\n\n"
-                "⚠️ ఈ linkని ఇతరులతో share చేయకండి."
-            )
-
-    elif event in [
-        "subscription.halted",
-        "subscription.completed"
-    ]:
-
-        send_message(
-            telegram_user_id,
-            "⚠️ మీ Premium subscription ముగిసింది.\n\n"
-            "Premium channel access కూడా ముగించబడుతుంది."
-        )
-
         try:
-            remove_member(
-                telegram_user_id
+
+            subscription = (
+                data
+                .get("payload", {})
+                .get("subscription", {})
+                .get("entity", {})
             )
+
+            subscription_id = subscription.get("id")
+
+            notes = subscription.get(
+                "notes",
+                {}
+            )
+
+            telegram_user_id = notes.get(
+                "telegram_user_id"
+            )
+
+            if (
+                subscription_id
+                and telegram_user_id
+                and subscription_id
+                not in processed_subscriptions
+            ):
+
+                processed_subscriptions.add(
+                    subscription_id
+                )
+
+                # Create one-time invite link
+                invite_result = telegram_api(
+                    "createChatInviteLink",
+                    {
+                        "chat_id": TELEGRAM_CHANNEL_ID,
+                        "member_limit": 1,
+                        "expire_date": int(time.time()) + 86400
+                    }
+                )
+
+                invite_link = (
+                    invite_result
+                    .get("result", {})
+                    .get("invite_link")
+                )
+
+                if invite_link:
+
+                    telegram_api(
+                        "sendMessage",
+                        {
+                            "chat_id": telegram_user_id,
+                            "text":
+                                "🎉 Payment Successful!\n\n"
+                                "💎 Medhavi Profits Premium\n\n"
+                                "👇 Premium Channel Join Link:\n\n"
+                                + invite_link
+                                + "\n\n"
+                                "⚠️ ఈ link ఒక్కసారి మాత్రమే ఉపయోగించండి."
+                        }
+                    )
+
+                    print(
+                        "Premium invite sent to:",
+                        telegram_user_id
+                    )
+
         except Exception as e:
 
             print(
-                "Remove member error:",
+                "Webhook processing error:",
                 e
             )
+
 
     return jsonify({
         "status": "ok"
     }), 200
 
 
+# =========================
+# HEALTH CHECK
+# =========================
+
 @app.route("/", methods=["GET"])
 def home():
 
-    return "Medhavi Profits Premium Bot is running!"
+    return "Medhavi Profits Premium Bot is Running!"
 
 
 @app.route("/health", methods=["GET"])
 def health():
 
     return jsonify({
-        "status": "healthy"
+        "status": "ok",
+        "bot": "running"
     })
 
 
-if __name__ == "__main__":
-
-    threading.Thread(
-        target=telegram_polling,
-        daemon=True
-    ).start()
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            10000
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    ) os
-import time
-import hmac
-import hashlib
-import threading
-import requests
-
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-
 # =========================
-# ENVIRONMENT VARIABLES
-# =========================
-
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHANNEL_ID = os.environ["TELEGRAM_CHANNEL_ID"]
-
-RAZORPAY_KEY_ID = os.environ["RAZORPAY_KEY_ID"]
-RAZORPAY_KEY_SECRET = os.environ["RAZORPAY_KEY_SECRET"]
-RAZORPAY_WEBHOOK_SECRET = os.environ["RAZORPAY_WEBHOOK_SECRET"]
-RAZORPAY_PLAN_ID = os.environ["RAZORPAY_PLAN_ID"]
-
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-RAZORPAY_API = "https://api.razorpay.com/v1"
-
-
-# =========================
-# TELEGRAM
-# =========================
-
-def telegram(method, data=None):
-    url = f"{TELEGRAM_API}/{method}"
-    response = requests.post(
-        url,
-        data=data or {},
-        timeout=30
-    )
-    return response.json()
-
-
-def send_message(chat_id, text):
-    return telegram(
-        "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": text
-        }
-    )
-
-
-def create_invite_link():
-    result = telegram(
-        "createChatInviteLink",
-        {
-            "chat_id": CHANNEL_ID,
-            "member_limit": 1
-        }
-    )
-
-    if result.get("ok"):
-        return result["result"]["invite_link"]
-
-    print("Invite error:", result)
-    return None
-
-
-def remove_member(user_id):
-    telegram(
-        "banChatMember",
-        {
-            "chat_id": CHANNEL_ID,
-            "user_id": user_id
-        }
-    )
-
-    telegram(
-        "unbanChatMember",
-        {
-            "chat_id": CHANNEL_ID,
-            "user_id": user_id,
-            "only_if_banned": True
-        }
-    )
-
-
-# =========================
-# RAZORPAY
-# =========================
-
-def create_subscription(telegram_user_id):
-
-    url = f"{RAZORPAY_API}/subscriptions"
-
-    payload = {
-        "plan_id": RAZORPAY_PLAN_ID,
-        "total_count": 1200,
-        "quantity": 1,
-        "customer_notify": True,
-        "notes": {
-            "telegram_user_id": str(telegram_user_id)
-        }
-    }
-
-    response = requests.post(
-        url,
-        auth=(
-            RAZORPAY_KEY_ID,
-            RAZORPAY_KEY_SECRET
-        ),
-        json=payload,
-        timeout=30
-    )
-
-    print("Razorpay status:", response.status_code)
-    print("Razorpay response:", response.text)
-
-    return response.json()
-
-
-# =========================
-# TELEGRAM POLLING
-# =========================
-
-def telegram_polling():
-
-    offset = None
-
-    while True:
-
-        try:
-
-            params = {
-                "timeout": 30
-            }
-
-            if offset is not None:
-                params["offset"] = offset
-
-            response = requests.get(
-                f"{TELEGRAM_API}/getUpdates",
-                params=params,
-                timeout=40
-            )
-
-            data = response.json()
-
-            if not data.get("ok"):
-
-                print("Telegram getUpdates error:", data)
-
-                time.sleep(5)
-                continue
-
-            for update in data.get("result", []):
-
-                offset = update["update_id"] + 1
-
-                message = update.get("message")
-
-                if not message:
-                    continue
-
-                chat_id = message["chat"]["id"]
-                text = message.get("text", "").strip()
-
-                # =========================
-                # START
-                # =========================
-
-                if text == "/start":
-
-                    send_message(
-                        chat_id,
-                        "👋 Welcome to Medhavi Profits Premium!\n\n"
-                        "💎 Monthly Membership: ₹1,499\n\n"
-                        "Premium membership కోసం /join టైప్ చేయండి."
-                    )
-
-                # =========================
-                # JOIN
-                # =========================
-
-                elif text == "/join":
-
-                    send_message(
-                        chat_id,
-                        "⏳ మీ ₹1,499 monthly subscription payment link create చేస్తున్నాను..."
-                    )
-
-                    result = create_subscription(chat_id)
-
-                    # =========================
-                    # SUCCESS
-                    # =========================
-
-                    if result.get("short_url"):
-
-                        send_message(
-                            chat_id,
-                            "💎 MEDHAVI PROFITS PREMIUM\n\n"
-                            "💰 Monthly: ₹1,499\n"
-                            "🔄 Auto-renewal: Monthly\n\n"
-                            "👇 Payment complete చేయడానికి ఈ link open చేయండి:\n\n"
-                            f"{result['short_url']}\n\n"
-                            "Payment successful అయిన తర్వాత "
-                            "premium channel access link మీకు automatically వస్తుంది."
-                        )
-
-                    # =========================
-                    # ERROR
-                    # =========================
-
-                    else:
-
-                        print(
-                            "Subscription creation error:",
-                            result
-                        )
-
-                        error_message = (
-                            result
-                            .get("error", {})
-                            .get("description")
-                            or str(result)
-                        )
-
-                        send_message(
-                            chat_id,
-                            "❌ Razorpay Error:\n\n"
-                            + error_message
-                        )
-
-        except Exception as error:
-
-            print(
-                "Telegram polling error:",
-                error
-            )
-
-            time.sleep(5)
-
-
-# =========================
-# RAZORPAY WEBHOOK
-# =========================
-
-@app.route(
-    "/webhook/razorpay",
-    methods=["POST"]
-)
-def razorpay_webhook():
-
-    body = request.get_data()
-
-    received_signature = request.headers.get(
-        "X-Razorpay-Signature",
-        ""
-    )
-
-    expected_signature = hmac.new(
-        RAZORPAY_WEBHOOK_SECRET.encode(),
-        body,
-        hashlib.sha256
-    ).hexdigest()
-
-    if not hmac.compare_digest(
-        received_signature,
-        expected_signature
-    ):
-
-        return jsonify(
-            {
-                "status": "invalid signature"
-            }
-        ), 400
-
-    data = request.get_json()
-
-    event = data.get(
-        "event",
-        ""
-    )
-
-    print(
-        "Razorpay Event:",
-        event
-    )
-
-    subscription = (
-        data
-        .get("payload", {})
-        .get("subscription", {})
-        .get("entity", {})
-    )
-
-    notes = subscription.get(
-        "notes",
-        {}
-    )
-
-    telegram_user_id = notes.get(
-        "telegram_user_id"
-    )
-
-    if not telegram_user_id:
-
-        print(
-            "Telegram user ID not found"
-        )
-
-        return jsonify(
-            {
-                "status": "ok"
-            }
-        ), 200
-
-    # =========================
-    # PAYMENT SUCCESS
-    # =========================
-
-    if event in [
-        "subscription.authenticated",
-        "subscription.activated",
-        "subscription.charged"
-    ]:
-
-        invite_link = create_invite_link()
-
-        if invite_link:
-
-            send_message(
-                telegram_user_id,
-                "✅ PAYMENT SUCCESSFUL!\n\n"
-                "🎉 మీ Medhavi Profits Premium membership active అయింది.\n\n"
-                "👇 Premium Channel Join Link:\n"
-                f"{invite_link}\n\n"
-                "⚠️ ఈ linkని ఇతరులతో share చేయకండి."
-            )
-
-    # =========================
-    # SUBSCRIPTION STOPPED
-    # =========================
-
-    elif event in [
-        "subscription.halted",
-        "subscription.completed"
-    ]:
-
-        send_message(
-            telegram_user_id,
-            "⚠️ మీ Premium subscription ముగిసింది.\n\n"
-            "Premium channel access కూడా ముగించబడుతుంది."
-        )
-
-        try:
-
-            remove_member(
-                telegram_user_id
-            )
-
-        except Exception as error:
-
-            print(
-                "Remove member error:",
-                error
-            )
-
-    return jsonify(
-        {
-            "status": "ok"
-        }
-    ), 200
-
-
-# =========================
-# HEALTH CHECK
-# =========================
-
-@app.route(
-    "/",
-    methods=["GET"]
-)
-def home():
-
-    return "Medhavi Profits Premium Bot is running!"
-
-
-@app.route(
-    "/health",
-    methods=["GET"]
-)
-def health():
-
-    return jsonify(
-        {
-            "status": "healthy"
-        }
-    )
-
-
-# =========================
-# START SERVER
+# START BOT + SERVER
 # =========================
 
 if __name__ == "__main__":
 
-    threading.Thread(
-        target=telegram_polling,
+    telegram_thread = threading.Thread(
+        target=run_telegram,
         daemon=True
-    ).start()
+    )
+
+    telegram_thread.start()
 
     port = int(
         os.environ.get(
