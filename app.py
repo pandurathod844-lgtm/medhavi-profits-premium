@@ -91,7 +91,7 @@ def create_subscription(telegram_user_id):
         "plan_id": RAZORPAY_PLAN_ID,
         "total_count": 1200,
         "quantity": 1,
-        "customer_notify": 1,
+        "customer_notify": True,
         "notes": {
             "telegram_user_id": str(telegram_user_id)
         }
