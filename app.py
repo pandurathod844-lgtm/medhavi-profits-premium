@@ -26,13 +26,17 @@ RAZORPAY_API = "https://api.razorpay.com/v1"
 
 
 # =========================
-# TELEGRAM FUNCTIONS
+# TELEGRAM
 # =========================
 
 def telegram(method, data=None):
     url = f"{TELEGRAM_API}/{method}"
-    r = requests.post(url, data=data or {}, timeout=30)
-    return r.json()
+    response = requests.post(
+        url,
+        data=data or {},
+        timeout=30
+    )
+    return response.json()
 
 
 def send_message(chat_id, text):
@@ -85,6 +89,7 @@ def remove_member(user_id):
 # =========================
 
 def create_subscription(telegram_user_id):
+
     url = f"{RAZORPAY_API}/subscriptions"
 
     payload = {
@@ -97,14 +102,20 @@ def create_subscription(telegram_user_id):
         }
     }
 
-    r = requests.post(
+    response = requests.post(
         url,
-        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+        auth=(
+            RAZORPAY_KEY_ID,
+            RAZORPAY_KEY_SECRET
+        ),
         json=payload,
         timeout=30
     )
 
-    return r.json()
+    print("Razorpay status:", response.status_code)
+    print("Razorpay response:", response.text)
+
+    return response.json()
 
 
 # =========================
@@ -112,30 +123,37 @@ def create_subscription(telegram_user_id):
 # =========================
 
 def telegram_polling():
+
     offset = None
 
     while True:
+
         try:
+
             params = {
                 "timeout": 30
             }
 
-            if offset:
+            if offset is not None:
                 params["offset"] = offset
 
-            r = requests.get(
+            response = requests.get(
                 f"{TELEGRAM_API}/getUpdates",
                 params=params,
                 timeout=40
             )
 
-            data = r.json()
+            data = response.json()
 
             if not data.get("ok"):
+
+                print("Telegram getUpdates error:", data)
+
                 time.sleep(5)
                 continue
 
             for update in data.get("result", []):
+
                 offset = update["update_id"] + 1
 
                 message = update.get("message")
@@ -146,7 +164,12 @@ def telegram_polling():
                 chat_id = message["chat"]["id"]
                 text = message.get("text", "").strip()
 
+                # =========================
+                # START
+                # =========================
+
                 if text == "/start":
+
                     send_message(
                         chat_id,
                         "👋 Welcome to Medhavi Profits Premium!\n\n"
@@ -154,7 +177,12 @@ def telegram_polling():
                         "Premium membership కోసం /join టైప్ చేయండి."
                     )
 
+                # =========================
+                # JOIN
+                # =========================
+
                 elif text == "/join":
+
                     send_message(
                         chat_id,
                         "⏳ మీ ₹1,499 monthly subscription payment link create చేస్తున్నాను..."
@@ -162,7 +190,12 @@ def telegram_polling():
 
                     result = create_subscription(chat_id)
 
+                    # =========================
+                    # SUCCESS
+                    # =========================
+
                     if result.get("short_url"):
+
                         send_message(
                             chat_id,
                             "💎 MEDHAVI PROFITS PREMIUM\n\n"
@@ -170,13 +203,25 @@ def telegram_polling():
                             "🔄 Auto-renewal: Monthly\n\n"
                             "👇 Payment complete చేయడానికి ఈ link open చేయండి:\n\n"
                             f"{result['short_url']}\n\n"
-                            "Payment successful అయిన తర్వాత premium channel access link మీకు automatically వస్తుంది."
+                            "Payment successful అయిన తర్వాత "
+                            "premium channel access link మీకు automatically వస్తుంది."
                         )
-                                        else:
-                        print("Subscription creation error:", result)
+
+                    # =========================
+                    # ERROR
+                    # =========================
+
+                    else:
+
+                        print(
+                            "Subscription creation error:",
+                            result
+                        )
 
                         error_message = (
-                            result.get("error", {}).get("description")
+                            result
+                            .get("error", {})
+                            .get("description")
                             or str(result)
                         )
 
@@ -185,8 +230,14 @@ def telegram_polling():
                             "❌ Razorpay Error:\n\n"
                             + error_message
                         )
-        except Exception as e:
-            print("Telegram polling error:", e)
+
+        except Exception as error:
+
+            print(
+                "Telegram polling error:",
+                error
+            )
+
             time.sleep(5)
 
 
@@ -194,7 +245,10 @@ def telegram_polling():
 # RAZORPAY WEBHOOK
 # =========================
 
-@app.route("/webhook/razorpay", methods=["POST"])
+@app.route(
+    "/webhook/razorpay",
+    methods=["POST"]
+)
 def razorpay_webhook():
 
     body = request.get_data()
@@ -214,27 +268,52 @@ def razorpay_webhook():
         received_signature,
         expected_signature
     ):
-        return jsonify({"status": "invalid signature"}), 400
+
+        return jsonify(
+            {
+                "status": "invalid signature"
+            }
+        ), 400
 
     data = request.get_json()
 
-    event = data.get("event", "")
+    event = data.get(
+        "event",
+        ""
+    )
 
-    print("Razorpay Event:", event)
+    print(
+        "Razorpay Event:",
+        event
+    )
 
     subscription = (
-        data.get("payload", {})
+        data
+        .get("payload", {})
         .get("subscription", {})
         .get("entity", {})
     )
 
-    notes = subscription.get("notes", {})
+    notes = subscription.get(
+        "notes",
+        {}
+    )
 
-    telegram_user_id = notes.get("telegram_user_id")
+    telegram_user_id = notes.get(
+        "telegram_user_id"
+    )
 
     if not telegram_user_id:
-        print("Telegram user ID not found")
-        return jsonify({"status": "ok"}), 200
+
+        print(
+            "Telegram user ID not found"
+        )
+
+        return jsonify(
+            {
+                "status": "ok"
+            }
+        ), 200
 
     # =========================
     # PAYMENT SUCCESS
@@ -249,6 +328,7 @@ def razorpay_webhook():
         invite_link = create_invite_link()
 
         if invite_link:
+
             send_message(
                 telegram_user_id,
                 "✅ PAYMENT SUCCESSFUL!\n\n"
@@ -274,29 +354,53 @@ def razorpay_webhook():
         )
 
         try:
-            remove_member(telegram_user_id)
-        except Exception as e:
-            print("Remove member error:", e)
 
-    return jsonify({"status": "ok"}), 200
+            remove_member(
+                telegram_user_id
+            )
+
+        except Exception as error:
+
+            print(
+                "Remove member error:",
+                error
+            )
+
+    return jsonify(
+        {
+            "status": "ok"
+        }
+    ), 200
 
 
 # =========================
 # HEALTH CHECK
 # =========================
 
-@app.route("/", methods=["GET"])
+@app.route(
+    "/",
+    methods=["GET"]
+)
 def home():
+
     return "Medhavi Profits Premium Bot is running!"
 
 
-@app.route("/health", methods=["GET"])
+@app.route(
+    "/health",
+    methods=["GET"]
+)
 def health():
-    return jsonify({"status": "healthy"})
+
+    return jsonify(
+        {
+            "status": "healthy"
+        }
+    )
 
 
 # =========================
-# START
+# START SERVER
 # =========================
 
 if __name__ == "__main__":
@@ -306,7 +410,12 @@ if __name__ == "__main__":
         daemon=True
     ).start()
 
-    port = int(os.environ.get("PORT", 10000))
+    port = int(
+        os.environ.get(
+            "PORT",
+            10000
+        )
+    )
 
     app.run(
         host="0.0.0.0",
