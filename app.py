@@ -265,11 +265,7 @@ def razorpay_webhook():
     print("Razorpay Event:", event)
 
 
-    if event in [
-        "subscription.authenticated",
-        "subscription.activated",
-        "subscription.charged"
-    ]:
+    if event == "subscription.charged":
 
         try:
 
